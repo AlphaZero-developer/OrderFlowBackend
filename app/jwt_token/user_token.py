@@ -18,13 +18,22 @@ def create_token(user_id: str) -> str:
 
 
 def decode_token(token: str) -> str:
-    secret = os.getenv("SECRET_KEY")
-    try:
+    if is_valid_token(token):
+        secret = os.getenv("SECRET_KEY")
         jwt_decoded = jwt.decode(
             token, secret, algorithms=["HS256"], options={"require": ["exp", "sub"]}
         )
         return str(jwt_decoded.get("sub"))
-    except jwt.ExpiredSignatureError:
-        raise
+
+
+def is_valid_token(token: str) -> bool:
+    try:
+        jwt.decode(
+            token,
+            os.getenv("SECRET_KEY"),
+            algorithms=["HS256"],
+            options={"require": ["exp", "sub"]},
+        )
+        return True
     except jwt.InvalidTokenError:
-        raise
+        return False

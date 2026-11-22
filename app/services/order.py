@@ -1,36 +1,38 @@
-from fastapi import HTTPException
-
 from app.repositories.order import OrderRepository
 from app.repositories.users import UsersRepository
-from app.jwt_token.user_token import decode_token, jwt
+from app.jwt_token.user_token import decode_token
 from app.schemas.order import Order
-from app.exceptions.exceptions import InsufficientPermissionsError
+from app.exceptions.exceptions import (
+    UnauthorizedError,
+    NotFoundError,
+    ForbiddenError,
+    ConflictError,
+)
 from sqlalchemy.orm import Session
 from app.core.order_status import ALLOWED_TRANSITIONS
+from app.cache.redis_cache import RedisCache
 
 
 class OrderService:
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, cache: RedisCache):
         self.db = db
         self.order_repository = OrderRepository(db)
         self.users_repository = UsersRepository(db)
+        self.redis_cache = cache
 
     def create_order(
         self, access_token: str, title: str, description: str, budget_rub: int
     ) -> Order:
 
-        try:
-            id_user = decode_token(access_token)
-        except jwt.InvalidTokenError:
-            raise HTTPException(status_code=401)
+        id_user = decode_token(access_token)
 
         user = self.users_repository.get_user_by_id(id_user)
 
         if user is None:
-            raise HTTPException(status_code=401)
+            raise UnauthorizedError()
 
         if user.role == "manager":
-            raise HTTPException(status_code=403)
+            raise ForbiddenError()
 
         new_order = self.order_repository.create(
             owner_id=id_user,
@@ -38,84 +40,82 @@ class OrderService:
             description=description,
             budget_rub=budget_rub,
         )
+
         self.db.commit()
+        self._ivalidate_orders_cache(user.id)
 
         return Order.model_validate(new_order)
 
     def get_all_orders_current_user(self, access_token: str) -> list[Order]:
 
-        try:
-            decoded_token = decode_token(access_token)
-        except jwt.InvalidTokenError:
-            raise HTTPException(status_code=401)
+        decoded_token = decode_token(access_token)
 
         user = self.users_repository.get_user_by_id(decoded_token)
 
         if user is None:
-            raise HTTPException(status_code=401, detail="Пользователь не найден")
+            raise UnauthorizedError()
 
-        if user.role != "manager":
-            return [
-                Order.model_validate(order)
-                for order in self.order_repository.get_all_orders_current_user(
-                    decoded_token
-                )
-            ]
+        cache_key = "orders:all" if user.role == "manager" else f"orders:user:{user.id}"
+
+        cached = self.redis_cache.get(cache_key)
+
+        if cached is not None:
+            return [Order.model_validate(item) for item in cached]
+
+        if user.role == "manager":
+            orders_orm = self.order_repository.get_all_orders()
         else:
-            return [
-                Order.model_validate(order)
-                for order in self.order_repository.get_all_orders()
-            ]
+            orders_orm = self.order_repository.get_all_orders_current_user(user.id)
+
+        orders = [Order.model_validate(o) for o in orders_orm]
+
+        self.redis_cache.set(cache_key, [o.model_dump(mode="json") for o in orders])
+
+        return orders
 
     def get_current_order(self, access_token: str, id: str) -> Order:
 
-        try:
-            user = self.users_repository.get_user_by_id(decode_token(access_token))
-        except jwt.InvalidTokenError:
-            raise HTTPException(status_code=401)
+        user = self.users_repository.get_user_by_id(decode_token(access_token))
 
         order = self.order_repository.get_current_order_by_id(id=id)
 
         if order is None:
-            raise HTTPException(status_code=404, detail="Заказ не найден")
+            raise NotFoundError()
 
         if user is None:
-            raise HTTPException(status_code=401, detail="Пользователь не найден")
+            raise UnauthorizedError()
 
         if order.owner_id != user.id:
             if user.role == "client":
-                raise HTTPException(status_code=404, detail="Заказ не найден")
+                raise NotFoundError()
 
         return Order.model_validate(order)
 
     def cancel_order(self, access_token: str, id: str) -> Order:
 
-        try:
-            user = self.users_repository.get_user_by_id(decode_token(access_token))
-        except jwt.InvalidTokenError:
-            raise HTTPException(status_code=401)
+        user = self.users_repository.get_user_by_id(decode_token(access_token))
 
         order = self.order_repository.get_current_order_by_id(id=id)
 
         if user is None:
-            raise HTTPException(status_code=401, detail="Пользователь не найден")
+            raise UnauthorizedError()
 
         if order is None:
-            raise HTTPException(status_code=404, detail="Заказ не найден")
+            raise NotFoundError()
 
         if order.owner_id != user.id:
             if user.role != "manager":
-                raise HTTPException(status_code=404, detail="Заказ не найден")
+                raise NotFoundError()
             else:
-                raise HTTPException(
-                    status_code=403, detail="Доступ к запрошенному ресурсу запрещён"
-                )
+                raise ForbiddenError()
         if order.status != "new":
-            raise HTTPException(status_code=409)
+            raise ConflictError()
 
         result = self.order_repository.cancel_order(id=id)
 
         self.db.commit()
+
+        self._ivalidate_orders_cache(user.id)
 
         return Order.model_validate(result)
 
@@ -124,29 +124,27 @@ class OrderService:
         current_order = self.order_repository.get_current_order_by_id(id)
 
         if current_order is None:
-            raise HTTPException(status_code=404, detail="Заказ не найден")
+            raise NotFoundError()
 
-        try:
-            user = self.users_repository.get_user_by_id(decode_token(access_token))
-        except jwt.InvalidTokenError:
-            raise HTTPException(status_code=401)
+        user = self.users_repository.get_user_by_id(decode_token(access_token))
 
         if user is None:
-            raise HTTPException(status_code=401, detail="Пользователь не найден")
+            raise UnauthorizedError()
 
         if user.role != "manager":
-            raise HTTPException(
-                status_code=403, detail="Доступ к запрошенному ресурсу запрещён"
-            )
+            raise ForbiddenError()
 
         if status not in ALLOWED_TRANSITIONS[current_order.status]:
-            raise HTTPException(
-                status_code=409,
-                detail=f"Переход {current_order.status} -> {status} запрещён",
-            )
+            raise ConflictError(detail="Переход запрещён")
 
         current_order = self.order_repository.update_status_order(id=id, status=status)
 
         self.db.commit()
         self.db.refresh(current_order)
+
+        self._ivalidate_orders_cache(current_order.owner_id)
+
         return Order.model_validate(current_order)
+
+    def _ivalidate_orders_cache(self, owner_id: str) -> None:
+        self.redis_cache.delete(f"orders:user:{owner_id}", "orders:all")
