@@ -8,7 +8,9 @@ REST API сервиса заказов на разработку сайтов, T
 
 - Python 3.14, FastAPI, Pydantic 2
 - SQLAlchemy 2, PostgreSQL 18, Alembic
+- Redis 7 — кэш списков заказов
 - JWT (PyJWT, HS256), Argon2 (pwdlib) для хеширования паролей
+- Pytest
 - Docker Compose
 
 ## Быстрый старт (Docker)
@@ -19,7 +21,7 @@ REST API сервиса заказов на разработку сайтов, T
    cp app/.env.example app/.env
    ```
 
-2. Заполните `app/.env` (см. таблицу ниже). `POSTGRES_PASSWORD` должен совпадать с `DB_PASSWORD`, а `POSTGRES_USER` — с `DB_USER`.
+2. Заполните `app/.env` (см. таблицу ниже). `POSTGRES_PASSWORD` должен совпадать с `DB_PASSWORD`, а `POSTGRES_USER` — с `DB_USER`. Для Docker укажите `REDIS_URL=redis://redis:6379/0`.
 
 3. Запустите:
 
@@ -27,8 +29,10 @@ REST API сервиса заказов на разработку сайтов, T
    docker compose up --build
    ```
 
+Compose поднимает три сервиса: `order_flow_backend` (API), `postgres` и `redis`. Наружу открыт только порт API.
+
 При старте контейнер API по очереди:
-1. ждёт, пока PostgreSQL пройдёт healthcheck;
+1. ждёт, пока PostgreSQL и Redis пройдут healthcheck;
 2. применяет миграции (`alembic upgrade head`);
 3. создаёт аккаунт менеджера из `MANAGER_EMAIL` и `MANAGER_PASSWORD`, если его ещё нет;
 4. запускает uvicorn.
@@ -54,6 +58,7 @@ REST API сервиса заказов на разработку сайтов, T
 | `SECRET_KEY` | Ключ подписи JWT — длинная случайная строка, например `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
 | `MANAGER_EMAIL` | Email аккаунта менеджера, который создаёт seed-скрипт |
 | `MANAGER_PASSWORD` | Пароль менеджера, не короче 8 символов: короче не пропустит валидация входа |
+| `REDIS_URL` | Адрес Redis. В Docker — `redis://redis:6379/0`; если не задан, используется `redis://localhost:6379/0` |
 
 Файл `app/.env` не попадает ни в Git (`.gitignore`), ни в Docker-образ (`.dockerignore`). В репозитории лежит только шаблон `app/.env.example`.
 
@@ -124,6 +129,39 @@ ready       → completed
 
 Ограничения полей: имя — 2–50 символов, пароль — 8–128, название заказа — 5–120, описание — 20–2000, бюджет — целое число от 1000 до 500000.
 
+Ошибки приходят в едином формате `{"detail": "..."}`. Сервисы выбрасывают собственные исключения (`UnauthorizedError`, `ForbiddenError`, `NotFoundError`, `ConflictError` в `app/exceptions/exceptions.py`), а обработчики из `app/exceptions/handlers.py` превращают их в HTTP-ответы. Любая ошибка JWT — просроченный, поддельный или битый токен — отдаётся как 401.
+
+## Кэширование
+
+Списки заказов (`GET /orders`) кэшируются в Redis по схеме cache-aside: сначала ответ ищется в кэше, при промахе берётся из PostgreSQL и кладётся в кэш.
+
+| Ключ | Что хранит |
+|---|---|
+| `orders:user:{user_id}` | Список заказов конкретного клиента |
+| `orders:all` | Список всех заказов для менеджера |
+
+- Ключ выбирается по пользователю из токена, поэтому клиент никогда не получит чужой список.
+- При создании, отмене и смене статуса заказа удаляются оба ключа — владельца заказа и `orders:all`. Удаление происходит после `commit`, чтобы в кэш не вернулись старые данные.
+- Время жизни записи — 1 час (`cache_ttl_seconds` в `app/core/settings.py`).
+- Если Redis недоступен, API продолжает работать напрямую с PostgreSQL: ошибки Redis только пишутся в лог (`app/cache/redis_cache.py`).
+
+## Тесты
+
+Тесты работают без PostgreSQL и Redis: база подменяется SQLite в памяти, кэш — заглушкой `FakeCache` (`tests/conftest.py`). Каждый тест начинается с пустой базы.
+
+```bash
+pip install -r requirements-dev.txt
+pytest -v
+```
+
+Что покрыто:
+- регистрация, вход и `/auth/me`, включая повторный email, неверный пароль и битый токен;
+- доступ к заказам: клиент не видит чужой заказ, менеджер видит все;
+- смена статуса: клиенту — 403, запрещённый переход — 409;
+- отмена только нового заказа;
+- обновление кэша: после смены статуса менеджером клиент сразу видит новый статус;
+- таблица переходов статусов (unit-тест).
+
 ## Миграции
 
 Миграции лежат в `migrations/versions`. В Docker они применяются автоматически при старте. Вручную внутри контейнера:
@@ -146,9 +184,11 @@ docker compose exec order_flow_backend alembic revision --autogenerate -m "оп�
 app/
   api/
     routes/          HTTP-маршруты: health, auth, orders
-    dependencies.py  внедрение сессии БД и сервисов
+    dependencies.py  внедрение сессии БД, кэша и сервисов
+  cache/             обёртка над Redis
   core/              настройки, хеширование паролей, таблица переходов статусов
   db/                engine и сессии SQLAlchemy
+  exceptions/        исключения приложения и их обработчики
   jwt_token/         создание и проверка JWT
   models/            ORM-модели (users, orders)
   repositories/      запросы к БД
@@ -156,11 +196,14 @@ app/
   services/          бизнес-логика и границы транзакций
   scripts/           seed-скрипт менеджера
 migrations/          Alembic
+tests/               pytest: фикстуры в conftest.py, тесты auth и orders
 Dockerfile
 docker-compose.yaml
+requirements.txt     зависимости приложения
+requirements-dev.txt зависимости для разработки и тестов
 ```
 
-Запрос проходит по цепочке: route → service (проверка прав, бизнес-правила, `commit`) → repository (SQL) → PostgreSQL.
+Запрос проходит по цепочке: route → service (проверка прав, бизнес-правила, `commit`, инвалидация кэша) → repository (SQL) → PostgreSQL. Списки заказов сервис сначала ищет в Redis.
 
 ## Frontend
 
@@ -170,5 +213,6 @@ CORS разрешён для `http://localhost:3000` и `http://172.19.0.1:3000`
 ## Ограничения текущей версии
 
 - Хост БД в `app/core/settings.py` зашит как `postgres`, поэтому приложение запускается только через Docker Compose. Для запуска без Docker нужно брать хост и порт из переменных окружения.
-- Автотестов пока нет.
+- Тесты используют SQLite, а не PostgreSQL: логику прав и статусов они проверяют, но поведение, специфичное для PostgreSQL (блокировки, часовые пояса), — нет.
+- Кэшируются только списки заказов; отдельный заказ (`GET /orders/{id}`) всегда читается из БД.
 - Нет refresh-токенов: JWT живёт 30 минут, после этого нужно войти заново.
