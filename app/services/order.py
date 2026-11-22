@@ -6,6 +6,7 @@ from app.jwt_token.user_token import decode_token, jwt
 from app.schemas.order import Order
 from app.exceptions.exceptions import InsufficientPermissionsError
 from sqlalchemy.orm import Session
+from app.core.order_status import ALLOWED_TRANSITIONS
 
 
 class OrderService:
@@ -38,9 +39,11 @@ class OrderService:
     def get_all_orders_current_user(self, access_token: str) -> list[Order]:
 
         try:
-            user = self.users_repository.get_user_by_id(decode_token(access_token))
+            decoded_token = decode_token(access_token)
         except jwt.InvalidTokenError:
             raise HTTPException(status_code=401)
+
+        user = self.users_repository.get_user_by_id(decoded_token)
 
         if user is None:
             raise HTTPException(status_code=401, detail="Пользователь не найден")
@@ -49,7 +52,7 @@ class OrderService:
             return [
                 Order.model_validate(order)
                 for order in self.order_repository.get_all_orders_current_user(
-                    decode_token(access_token)
+                    decoded_token
                 )
             ]
         else:
@@ -112,6 +115,11 @@ class OrderService:
 
     def update_status_order(self, access_token: str, id: str, status: str) -> Order:
 
+        current_order = self.order_repository.update_status_order(id, status)
+
+        if current_order is None:
+            raise HTTPException(status_code=404, detail="Заказ не найден")
+
         try:
             user = self.users_repository.get_user_by_id(decode_token(access_token))
         except jwt.InvalidTokenError:
@@ -125,6 +133,11 @@ class OrderService:
                 status_code=403, detail="Доступ к запрошенному ресурсу запрещён"
             )
 
-        current_order = self.order_repository.update_status_order(id, status)
+        if status not in ALLOWED_TRANSITIONS[current_order.status]:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Переход {current_order.status} -> {status} запрещён",
+            )
         self.db.commit()
+        self.db.refresh(current_order)
         return Order.model_validate(current_order)

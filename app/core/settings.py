@@ -10,17 +10,20 @@ load_dotenv(path)
 
 @dataclass(frozen=True)
 class Settings:
-    DATABASE_URL: URL
+    database_url: URL
     allow_origins: list[str]
 
 
 def get_settings() -> Settings:
-    url_to_db = URL.create(
+    database_url = URL.create(
         drivername="postgresql+psycopg",
         username=os.getenv("DB_USER"),
         password=os.getenv("DB_PASSWORD"),
-        host="localhost",
-        port=15432,
+        host="postgres",
+        port=5432,
         database="postgres",
     )
-    return Settings(url_to_db, ["http://localhost:3000", "http://172.19.0.1:3000"])
+    return Settings(
+        database_url=database_url,
+        allow_origins=["http://localhost:3000", "http://172.19.0.1:3000"],
+    )

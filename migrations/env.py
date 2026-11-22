@@ -12,7 +12,7 @@ from alembic import context
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
-db_url = get_settings().DATABASE_URL
+db_url = get_settings().database_url
 
 config.set_main_option(
     "sqlalchemy.url", db_url.render_as_string(hide_password=False).replace("%", "%%")
