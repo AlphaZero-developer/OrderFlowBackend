@@ -23,8 +23,14 @@ class OrderService:
             id_user = decode_token(access_token)
         except jwt.InvalidTokenError:
             raise HTTPException(status_code=401)
-        if id_user == "":
-            raise HTTPException(status_code=404, detail="Пользователь не найден")
+
+        user = self.users_repository.get_user_by_id(id_user)
+
+        if user is None:
+            raise HTTPException(status_code=401)
+
+        if user.role == "manager":
+            raise HTTPException(status_code=403)
 
         new_order = self.order_repository.create(
             owner_id=id_user,
@@ -115,7 +121,7 @@ class OrderService:
 
     def update_status_order(self, access_token: str, id: str, status: str) -> Order:
 
-        current_order = self.order_repository.update_status_order(id, status)
+        current_order = self.order_repository.get_current_order_by_id(id)
 
         if current_order is None:
             raise HTTPException(status_code=404, detail="Заказ не найден")
@@ -138,6 +144,9 @@ class OrderService:
                 status_code=409,
                 detail=f"Переход {current_order.status} -> {status} запрещён",
             )
+
+        current_order = self.order_repository.update_status_order(id=id, status=status)
+
         self.db.commit()
         self.db.refresh(current_order)
         return Order.model_validate(current_order)
