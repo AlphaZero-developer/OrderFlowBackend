@@ -1,3 +1,4 @@
+import jwt
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from app.schemas.user import UserOut, AutorizationToken
@@ -53,7 +54,13 @@ class UsersService:
 
     def get_me_user(self, access_token: str) -> UserOut:
 
-        user = self.user_repository.get_user_by_id(decode_token(access_token))
+        try:
+            user = self.user_repository.get_user_by_id(decode_token(access_token))
+        except jwt.InvalidTokenError:
+            raise HTTPException(status_code=401)
+
+        if user is None:
+            raise HTTPException(status_code=401)
 
         result = UserOut.model_validate(user)
 

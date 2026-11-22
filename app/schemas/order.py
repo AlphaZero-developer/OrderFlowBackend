@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 
@@ -8,8 +10,8 @@ class Order(BaseModel):
     owner_id: str
     title: str = Field(min_length=5, max_length=120)
     description: str = Field(min_length=20, max_length=2000)
-    budget_rub: int
-    status: str
+    budget_rub: int = Field(ge=1000, le=500000)
+    status: Literal["new", "in_progress", "ready", "completed", "canceled"]
     created_at: datetime
     updated_at: datetime
 
@@ -17,8 +19,8 @@ class Order(BaseModel):
 class OrderCreateSchema(BaseModel):
     title: str = Field(min_length=5, max_length=120)
     description: str = Field(min_length=20, max_length=2000)
-    budget_rub: int
+    budget_rub: int = Field(ge=1000, le=500000)
 
 
 class OrderUpgradeSchema(BaseModel):
-    status: str
+    status: Literal["new", "in_progress", "ready", "completed", "canceled"]

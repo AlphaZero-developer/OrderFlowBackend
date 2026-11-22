@@ -32,11 +32,13 @@ class OrderRepository:
     def get_current_order_by_id(self, id: str) -> OrderORM | None:
         return self.db.scalar(select(OrderORM).where(OrderORM.id == id))
 
-    def delete_order(self, id: str) -> None:
+    def cancel_order(self, id: str) -> OrderORM:
 
-        order_for_delete = self.get_current_order_by_id(id)
+        order_for_cancel = self.get_current_order_by_id(id)
 
-        self.db.delete(order_for_delete)
+        order_for_cancel.status = "canceled"
+
+        return order_for_cancel
 
     def update_status_order(self, id: str, status: str) -> OrderORM:
 

@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from datetime import datetime
 
@@ -21,7 +23,7 @@ class AutorizationToken(BaseModel):
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
-    name: str
-    email: str
-    role: str
+    name: str = Field(min_length=2, max_length=50)
+    email: EmailStr
+    role: Literal["client", "manager"]
     created_at: datetime

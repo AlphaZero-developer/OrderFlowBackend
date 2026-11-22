@@ -9,7 +9,7 @@ class OrderORM(Base):
     __tablename__ = "orders"
 
     id: Mapped[str] = mapped_column(
-        "id_order", primary_key=True, default=lambda: str(uuid4())
+        "id_order", primary_key=True, index=True, default=lambda: str(uuid4())
     )
     owner_id: Mapped[str] = mapped_column()
     title: Mapped[str] = mapped_column()

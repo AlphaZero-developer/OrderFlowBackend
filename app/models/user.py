@@ -9,7 +9,7 @@ class UserORM(Base):
     __tablename__ = "users"
 
     id: Mapped[str] = mapped_column(
-        "id_user", primary_key=True, default=lambda: str(uuid4())
+        "id_user", primary_key=True, index=True, default=lambda: str(uuid4())
     )
     name: Mapped[str] = mapped_column(default="")
     email: Mapped[str] = mapped_column(unique=True, index=True)

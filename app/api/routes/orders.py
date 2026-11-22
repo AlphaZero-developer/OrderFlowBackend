@@ -45,16 +45,28 @@ def get_all_orders_current_user(
 
 @router.get("/orders/{id}", status_code=status.HTTP_200_OK)
 def get_current_order(
-    id: str, order_service: OrderService = Depends(get_order_service)
+    id: str,
+    order_service: OrderService = Depends(get_order_service),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> Order:
-    return order_service.get_current_order(id)
+
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Нету токена")
+
+    return order_service.get_current_order(access_token=credentials.credentials, id=id)
 
 
 @router.post("/orders/{id}/cancel")
-def delete_order(
-    id: str, order_service: OrderService = Depends(get_order_service)
-) -> None:
-    order_service.delete_order(id)
+def cancel_order(
+    id: str,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    order_service: OrderService = Depends(get_order_service),
+) -> Order:
+
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Нету токена")
+
+    return order_service.cancel_order(access_token=credentials.credentials, id=id)
 
 
 @router.patch("/orders/{id}/status")

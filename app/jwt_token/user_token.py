@@ -13,6 +13,7 @@ def create_token(user_id: str) -> str:
     payload = {
         "sub": user_id,
         "exp": datetime.now(timezone.utc) + timedelta(minutes=30),
+        al
     }
     return jwt.encode(payload, secret, algorithm="HS256")
 
@@ -20,8 +21,9 @@ def create_token(user_id: str) -> str:
 def decode_token(token: str) -> str:
     secret = os.getenv("SECRET_KEY")
     try:
-        jwt_decoded = jwt.decode(token, secret, algorithms="HS256")
+        jwt_decoded = jwt.decode(token, secret, algorithms=["HS256"], options={"require": ["exp", "sub"]})
         return str(jwt_decoded.get("sub"))
     except jwt.ExpiredSignatureError:
-        print("Ключ устарел, обновите нахуй")
-        return ""
+        raise
+    except jwt.InvalidTokenError:
+        raise
