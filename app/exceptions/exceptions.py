@@ -1,0 +1,2 @@
+class InsufficientPermissionsError(Exception):
+    pass
